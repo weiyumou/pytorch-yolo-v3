@@ -4,45 +4,15 @@ import torch
 import torch.nn as nn
 import numpy as np
 import cv2
-# from util import *
 import util
 import argparse
 import os
-import os.path as osp
 from darknet import Darknet
-from preprocess import prep_image, inp_to_image
+import preprocess
 import pandas as pd
 import random
 import pickle as pkl
 import itertools
-
-
-# class test_net(nn.Module):
-#     def __init__(self, num_layers, input_size):
-#         super(test_net, self).__init__()
-#         self.num_layers = num_layers
-#         self.linear_1 = nn.Linear(input_size, 5)
-#         self.middle = nn.ModuleList([nn.Linear(5, 5) for x in range(num_layers)])
-#         self.output = nn.Linear(5, 2)
-#
-#     def forward(self, x):
-#         x = x.view(-1)
-#         fwd = nn.Sequential(self.linear_1, *self.middle, self.output)
-#         return fwd(x)
-
-
-# def get_test_input(input_dim, device):
-#     img = cv2.imread("dog-cycle-car.png")
-#     img = cv2.resize(img, (input_dim, input_dim))
-#     img_ = img[:, :, ::-1].transpose((2, 0, 1))
-#     img_ = img_[np.newaxis, :, :, :] / 255.0
-#     img_ = torch.from_numpy(img_).float()
-#     img_ = Variable(img_)
-#
-#     if CUDA:
-#         img_ = img_.cuda()
-#     num_classes
-#     return img_
 
 
 def arg_parse():
@@ -57,20 +27,21 @@ def arg_parse():
     "Image / Directory containing images to perform detection upon",
                         default="imgs", type=str)
     parser.add_argument("--det", dest='det', help=
-    "Image / Directory to store detections to",
-                        default="det", type=str)
+    "Image / Directory to store detections to", default="det", type=str)
     parser.add_argument("--bs", dest="bs", help="Batch size", default=1)
-    parser.add_argument("--confidence", dest="confidence", help="Object Confidence to filter predictions", default=0.5)
+    parser.add_argument("--confidence", dest="confidence", help="Object Confidence to filter predictions", default=0.8)
     parser.add_argument("--nms_thresh", dest="nms_thresh", help="NMS Threshhold", default=0.4)
     parser.add_argument("--cfg", dest='cfgfile', help="Config file",
-                        default="cfg/yolov3.cfg", type=str)
+                        default="cfg/yolov3-openimages.cfg", type=str)
     parser.add_argument("--weights", dest='weightsfile', help="weightsfile",
-                        default="yolov3.weights", type=str)
+                        default="weights/yolov3-openimages.weights", type=str)
     parser.add_argument("--reso", dest='reso', help=
     "Input resolution of the network. Increase to increase accuracy. Decrease to increase speed",
                         default="416", type=str)
     parser.add_argument("--scales", dest="scales", help="Scales to use for detection",
                         default="1,2,3", type=str)
+    parser.add_argument("--classes", dest='classes', help="Classes to detect",
+                        default="data/openimages.names", type=str)
 
     return parser.parse_args()
 
@@ -106,10 +77,9 @@ if __name__ == '__main__':
     start = 0
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # CUDA = torch.cuda.is_available()
 
-    num_classes = 80
-    classes = util.load_classes('data/coco.names')
+    classes = util.load_classes(args.classes)
+    num_classes = len(classes)
 
     # Set up the neural network
     print("Loading network.....")
@@ -123,8 +93,6 @@ if __name__ == '__main__':
     assert inp_dim > 32
 
     # If there's a GPU availible, put the model on GPU
-    # if CUDA:
-    #     model.cuda()
     model = model.to(device)
 
     # Set the model in evaluation mode
@@ -132,13 +100,15 @@ if __name__ == '__main__':
 
     read_dir = time.time()
     # Detection phase
+    imlist = []
     try:
-        imlist = [osp.join(osp.realpath('.'), images, img) for img in os.listdir(images) if
-                  os.path.splitext(img)[1] == '.png' or os.path.splitext(img)[1] == '.jpeg' or os.path.splitext(img)[
-                      1] == '.jpg']
+        imlist = [os.path.join(os.path.realpath('.'), images, img)
+                  for img in os.listdir(images)
+                  if os.path.splitext(img)[1] == '.png' or
+                  os.path.splitext(img)[1] == '.jpeg' or
+                  os.path.splitext(img)[1] == '.jpg']
     except NotADirectoryError:
-        imlist = list()
-        imlist.append(osp.join(osp.realpath('.'), images))
+        imlist.append(os.path.join(os.path.realpath('.'), images))
     except FileNotFoundError:
         print("No file or directory with the name {}".format(images))
         exit()
@@ -148,19 +118,15 @@ if __name__ == '__main__':
 
     load_batch = time.time()
 
-    batches = list(map(prep_image, imlist, [inp_dim for x in range(len(imlist))]))
-    im_batches = [x[0] for x in batches]
-    orig_ims = [x[1] for x in batches]
-    im_dim_list = [x[2] for x in batches]
-    im_dim_list = torch.FloatTensor(im_dim_list).repeat(1, 2)
+    batches = list(map(preprocess.prep_image, imlist, [inp_dim for x in range(len(imlist))]))
 
-    # if CUDA:
-    #     im_dim_list = im_dim_list.cuda()
+    # im_batches = [x[0] for x in batches]
+    # orig_ims = [x[1] for x in batches]
+    # im_dim_list = [x[2] for x in batches]
 
-    im_dim_list = im_dim_list.to(device)
+    im_batches, orig_ims, im_dim_list = tuple(zip(*batches))
 
     leftover = 0
-
     if len(im_dim_list) % batch_size:
         leftover = 1
 
@@ -169,20 +135,18 @@ if __name__ == '__main__':
         im_batches = [torch.cat((im_batches[i * batch_size: min((i + 1) * batch_size,
                                                                 len(im_batches))])) for i in range(num_batches)]
 
-    i = 0
+    im_dim_list = torch.FloatTensor(im_dim_list).repeat(1, 2)
+    im_dim_list = im_dim_list.to(device)
 
+    i = 0
     write = False
-    # model(get_test_input(inp_dim, CUDA), CUDA)
 
     start_det_loop = time.time()
-
     objs = {}
 
     for batch in im_batches:
         # load the image
         start = time.time()
-        # if CUDA:
-        #     batch = batch.cuda()
         batch = batch.to(device)
 
         # Apply offsets to the result predictions
@@ -210,14 +174,11 @@ if __name__ == '__main__':
             continue
 
         end = time.time()
-
-        #        print(end - start)
-
         prediction[:, 0] += i * batch_size
 
         if not write:
             output = prediction
-            write = 1
+            write = True
         else:
             output = torch.cat((output, prediction))
 

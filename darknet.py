@@ -8,8 +8,9 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 from util import count_parameters as count
-from util import convert2cpu as cpu
-from util import predict_transform
+# from util import convert2cpu as cpu
+# from util import predict_transform
+import util
 
 
 # class test_net(nn.Module):
@@ -46,7 +47,7 @@ def parse_cfg(cfgfile):
     """
     file = open(cfgfile, 'r')
     lines = file.read().split('\n')  # store the lines in a list
-    lines = [x for x in lines if len(x) > 0]  # get read of the empty lines
+    lines = [x for x in lines if len(x) > 0]  # get rid of the empty lines
     lines = [x for x in lines if x[0] != '#']
     lines = [x.rstrip().lstrip() for x in lines]
 
@@ -96,7 +97,7 @@ class DetectionLayer(nn.Module):
         x = x.data
         # global CUDA
         prediction = x
-        prediction = predict_transform(prediction, inp_dim, self.anchors, num_classes, confidence)
+        prediction = util.predict_transform(prediction, inp_dim, self.anchors, num_classes, confidence)
         return prediction
 
 
@@ -152,11 +153,11 @@ def create_modules(blocks):
     for x in blocks:
         module = nn.Sequential()
 
-        if (x["type"] == "net"):
+        if x["type"] == "net":
             continue
 
         # If it's a convolutional layer
-        if (x["type"] == "convolutional"):
+        if x["type"] == "convolutional":
             # Get the info about the layer
             activation = x["activation"]
             try:
@@ -196,7 +197,7 @@ def create_modules(blocks):
         # If it's an upsampling layer
         # We use Bilinear2dUpsampling
 
-        elif (x["type"] == "upsample"):
+        elif x["type"] == "upsample":
             stride = int(x["stride"])
             #            upsample = Upsample(stride)
             upsample = nn.Upsample(scale_factor=2, mode="nearest")
@@ -342,7 +343,7 @@ class Darknet(nn.Module):
 
                 # Output the result
                 x = x.data
-                x = predict_transform(x, inp_dim, anchors, num_classes)
+                x = util.predict_transform(x, inp_dim, anchors, num_classes)
 
                 if type(x) == int:
                     continue
@@ -465,7 +466,7 @@ class Darknet(nn.Module):
         for i in range(len(self.module_list)):
             module_type = self.blocks[i + 1]["type"]
 
-            if (module_type) == "convolutional":
+            if module_type == "convolutional":
                 model = self.module_list[i]
                 try:
                     batch_normalize = int(self.blocks[i + 1]["batch_normalize"])
@@ -474,29 +475,26 @@ class Darknet(nn.Module):
 
                 conv = model[0]
 
-                if (batch_normalize):
+                if batch_normalize:
                     bn = model[1]
 
                     # If the parameters are on GPU, convert them back to CPU
                     # We don't convert the parameter to GPU
                     # Instead. we copy the parameter and then convert it to CPU
                     # This is done as weight are need to be saved during training
-                    cpu(bn.bias.data).numpy().tofile(fp)
-                    cpu(bn.weight.data).numpy().tofile(fp)
-                    cpu(bn.running_mean).numpy().tofile(fp)
-                    cpu(bn.running_var).numpy().tofile(fp)
-
+                    # cpu(bn.bias.data).numpy().tofile(fp)
+                    bn.bias.cpu().numpy().tofile(fp)
+                    # cpu(bn.weight.data).numpy().tofile(fp)
+                    bn.weight.cpu().numpy().tofile(fp)
+                    # cpu(bn.running_mean).numpy().tofile(fp)
+                    bn.running_mean.cpu().numpy().tofile(fp)
+                    # cpu(bn.running_var).numpy().tofile(fp)
+                    bn.running_var.cpu().numpy().tofile(fp)
 
                 else:
-                    cpu(conv.bias.data).numpy().tofile(fp)
+                    # util.convert2cpu(conv.bias.data).numpy().tofile(fp)
+                    conv.bias.cpu().numpy().tofile(fp)
 
                 # Let us save the weights for the Convolutional layers
-                cpu(conv.weight.data).numpy().tofile(fp)
-
-#
-# dn = Darknet('cfg/yolov3.cfg')
-# dn.load_weights("yolov3.weights")
-# inp = get_test_input()
-# a, interms = dn(inp)
-# dn.eval()
-# a_i, interms_i = dn(inp)
+                # util.convert2cpu(conv.weight.data).numpy().tofile(fp)
+                conv.weight.cpu().numpy().tofile(fp)
